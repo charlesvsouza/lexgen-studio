@@ -3,12 +3,14 @@ from tkinter import filedialog
 import threading
 import os
 import tempfile
+import webbrowser
 from dotenv import load_dotenv
 from PIL import ImageGrab
 
 import database
 import ia
 import documentos
+import pagamentos  # <-- Nosso novo módulo de pagamentos!
 
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -28,17 +30,15 @@ class AppJuridico(ctk.CTk):
 
         self.usuario_logado = None
 
-        # Inicia pela tela de Splash
         self.mostrar_splash()
 
     def limpar_janela(self):
-        """Remove absolutamente tudo da janela principal para trocar de sistema"""
         for widget in self.winfo_children():
             widget.destroy()
 
-    # ==========================================
+    # 
     # TELA 1: SPLASH (APRESENTAÇÃO)
-    # ==========================================
+    # 
     def mostrar_splash(self):
         self.limpar_janela()
         
@@ -46,17 +46,15 @@ class AppJuridico(ctk.CTk):
         frame_splash.place(relx=0.5, rely=0.5, anchor="center")
 
         ctk.CTkLabel(frame_splash, text="LEXGEN", font=ctk.CTkFont(size=60, weight="bold", family="Arial")).pack()
-        # CORREÇÃO AQUI: Removido o letterspacing e adicionado os espaços na string manualmente
         ctk.CTkLabel(frame_splash, text="S  T  U  D  I  O", font=ctk.CTkFont(size=30), text_color="#8A2BE2").pack(pady=(0, 30))
         
         ctk.CTkLabel(frame_splash, text="Carregando IA Jurídica...", font=ctk.CTkFont(size=14), text_color="gray").pack()
         
-        # Pula para login após 2.5 segundos
         self.after(2500, self.mostrar_login)
 
-    # ==========================================
+    # 
     # TELA 2: LOGIN E CADASTRO
-    # ==========================================
+    # 
     def mostrar_login(self):
         self.limpar_janela()
         
@@ -103,24 +101,21 @@ class AppJuridico(ctk.CTk):
         else:
             self.lbl_status_login.configure(text=msg, text_color="red")
 
-    # ==========================================
+    # 
     # TELA 3: DASHBOARD PRINCIPAL (SISTEMA)
-    # ==========================================
+    # 
     def montar_dashboard_principal(self):
         self.limpar_janela()
         self.bind('<Control-v>', self.evento_colar_teclado)
 
-        # Atualiza os dados do usuário para ter certeza do plano
         self.usuario_logado = database.obter_usuario(self.usuario_logado['email'])
 
-        # ============ MENU LATERAL ============
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
         self.sidebar_frame.pack(side="left", fill="y")
 
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="LexGen Studio", font=ctk.CTkFont(size=24, weight="bold"))
         self.logo_label.pack(pady=(20, 5), padx=20)
 
-        # Etiqueta do Plano
         cor_plano = "#FFD700" if self.usuario_logado['plano'] == 'pro' else "gray"
         texto_plano = f"Plano: {self.usuario_logado['plano'].upper()}"
         ctk.CTkLabel(self.sidebar_frame, text=texto_plano, font=ctk.CTkFont(size=12, weight="bold"), text_color=cor_plano).pack(pady=(0, 20))
@@ -144,7 +139,6 @@ class AppJuridico(ctk.CTk):
         self.btn_analisar = ctk.CTkButton(self.sidebar_frame, text="🔍 Leitor de Contratos", fg_color="#D2691E", hover_color="#BA55D3", command=self.mostrar_analise)
         self.btn_analisar.pack(pady=5, padx=20)
 
-        # Botão de Upgrade se for Basic
         if self.usuario_logado['plano'] == 'basic':
             self.lbl_uso_ia = ctk.CTkLabel(self.sidebar_frame, text=f"Uso IA: {self.usuario_logado['usos_ia']}/{LIMITE_IA_BASIC}", text_color="orange")
             self.lbl_uso_ia.pack(pady=(30, 0))
@@ -153,48 +147,74 @@ class AppJuridico(ctk.CTk):
         else:
             ctk.CTkLabel(self.sidebar_frame, text="Uso IA: Ilimitado", text_color="green").pack(pady=(30, 0))
 
-        # ============ ÁREA PRINCIPAL ============
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.pack(side="right", fill="both", expand=True, padx=20, pady=20)
 
         self.mostrar_configuracoes()
 
     def limpar_tela_main(self):
-        """Limpa apenas o painel direito (muda de aba)"""
         for widget in self.main_frame.winfo_children():
             widget.destroy()
 
-    # ==========================================
-    # TELA DE UPGRADE PRO
-    # ==========================================
+    # 
+    # TELA DE UPGRADE PRO (COM INTEGRAÇÃO MERCADO PAGO)
+    # 
     def mostrar_upgrade(self):
         self.limpar_tela_main()
         ctk.CTkLabel(self.main_frame, text="⭐ Atualize para o LexGen PRO", font=ctk.CTkFont(size=30, weight="bold"), text_color="#FFD700").pack(pady=(30, 10))
-        
         ctk.CTkLabel(self.main_frame, text="Destrave o poder máximo da Inteligência Artificial no seu escritório.", font=ctk.CTkFont(size=16)).pack(pady=(0, 30))
 
         frame_planos = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         frame_planos.pack(pady=10)
 
-        # Card PRO
-        card_pro = ctk.CTkFrame(frame_planos, width=400, height=300, corner_radius=15, border_width=2, border_color="#FFD700")
+        card_pro = ctk.CTkFrame(frame_planos, width=400, height=350, corner_radius=15, border_width=2, border_color="#FFD700")
         card_pro.pack(padx=20, pady=20)
         card_pro.pack_propagate(False)
 
         ctk.CTkLabel(card_pro, text="Plano PRO Ilimitado", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=20)
         ctk.CTkLabel(card_pro, text="✔️ Redação Mágica Ilimitada\n✔️ Análise de Documentos Ilimitada\n✔️ Suporte Prioritário\n✔️ Novas Funcionalidades Antecipadas", justify="left").pack(pady=10)
-        ctk.CTkLabel(card_pro, text="R$ 97,00 / mês", font=ctk.CTkFont(size=24, weight="bold"), text_color="#8A2BE2").pack(pady=20)
+        ctk.CTkLabel(card_pro, text="R$ 97,00 / mês", font=ctk.CTkFont(size=24, weight="bold"), text_color="#8A2BE2").pack(pady=10)
 
-        btn_assinar = ctk.CTkButton(card_pro, text="Confirmar Pagamento e Assinar", font=ctk.CTkFont(weight="bold"), fg_color="#FFD700", text_color="black", hover_color="#DAA520", command=self.efetuar_upgrade)
-        btn_assinar.pack(pady=10)
+        self.btn_assinar = ctk.CTkButton(card_pro, text="Gerar Link de Pagamento", font=ctk.CTkFont(weight="bold"), fg_color="#FFD700", text_color="black", hover_color="#DAA520", command=self.iniciar_pagamento)
+        self.btn_assinar.pack(pady=10)
+        
+        self.lbl_status_pagamento = ctk.CTkLabel(card_pro, text="")
+        self.lbl_status_pagamento.pack()
 
-    def efetuar_upgrade(self):
-        database.atualizar_plano_pro(self.usuario_logado['email'])
-        self.montar_dashboard_principal() 
+    def iniciar_pagamento(self):
+        self.lbl_status_pagamento.configure(text="⏳ Gerando link seguro no Mercado Pago...", text_color="yellow")
+        self.btn_assinar.configure(state="disabled")
+        threading.Thread(target=self._thread_gerar_pagamento).start()
 
-    # ==========================================
-    # VERIFICADOR DE COTA DE IA
-    # ==========================================
+    def _thread_gerar_pagamento(self):
+        link, erro = pagamentos.gerar_link_pagamento(self.usuario_logado['email'])
+        
+        if link:
+            webbrowser.open(link) # Abre o navegador no checkout
+            self.lbl_status_pagamento.configure(text="✅ Link aberto no navegador!\nApós concluir o pagamento, valide abaixo.", text_color="green")
+            self.btn_assinar.configure(state="normal", text="Validar Meu Pagamento", command=self.validar_pagamento_agora)
+        else:
+            self.lbl_status_pagamento.configure(text=f"❌ Erro: {erro}", text_color="red")
+            self.btn_assinar.configure(state="normal")
+
+    def validar_pagamento_agora(self):
+        self.lbl_status_pagamento.configure(text="⏳ Consultando o banco do Mercado Pago...", text_color="yellow")
+        self.btn_assinar.configure(state="disabled")
+        threading.Thread(target=self._thread_validar_pagamento).start()
+        
+    def _thread_validar_pagamento(self):
+        aprovado = pagamentos.verificar_pagamento_aprovado(self.usuario_logado['email'])
+        if aprovado:
+            database.atualizar_plano_pro(self.usuario_logado['email'])
+            self.lbl_status_pagamento.configure(text="🎉 Pagamento Aprovado! Bem-vindo ao PRO.", text_color="green")
+            self.after(2500, self.montar_dashboard_principal) # Destrava o sistema!
+        else:
+            self.lbl_status_pagamento.configure(text="⚠️ Pagamento ainda não consta como aprovado.\nTente novamente em alguns segundos.", text_color="orange")
+            self.btn_assinar.configure(state="normal")
+
+    # 
+    # VERIFICADOR DE COTA DE IA E OUTRAS FUNÇÕES
+    # 
     def tem_cota_ia(self):
         user = database.obter_usuario(self.usuario_logado['email'])
         self.usuario_logado = user
@@ -211,9 +231,6 @@ class AppJuridico(ctk.CTk):
             if hasattr(self, 'lbl_uso_ia'):
                 self.lbl_uso_ia.configure(text=f"Uso IA: {self.usuario_logado['usos_ia']}/{LIMITE_IA_BASIC}")
 
-    # ==========================================
-    # TELAS ORIGINAIS ADAPTADAS
-    # ==========================================
     def mostrar_configuracoes(self):
         self.limpar_tela_main()
         ctk.CTkLabel(self.main_frame, text="Configurações do Escritório", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=(10, 20))
