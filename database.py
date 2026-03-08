@@ -1,108 +1,105 @@
+import os
+import psycopg2
+import psycopg2.errors
 import sqlite3
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
 
-DB_NAME = "lexgen_dados.db"
+load_dotenv()
+
+# Conexões
+DATABASE_URL = os.getenv("DATABASE_URL")
+LOCAL_DB = "lexgen_config_local.db" # Banco local APENAS para configurações do PC
+
+def get_cloud_connection():
+    """Gera conexão com o Supabase retornando dados como Dicionário"""
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def criar_tabelas():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
+    # 1. TABELA NA NUVEM (PostgreSQL) - Contas de Usuários
+    if DATABASE_URL:
+        with get_cloud_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS usuarios (
+                        id SERIAL PRIMARY KEY,
+                        email VARCHAR(255) UNIQUE NOT NULL,
+                        senha VARCHAR(255) NOT NULL,
+                        plano VARCHAR(50) DEFAULT 'basic',
+                        usos_ia INTEGER DEFAULT 0,
+                        criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            conn.commit()
     
-    # Tabela do Escritório
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS configuracoes_escritorio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nome_escritorio TEXT NOT NULL,
-            oab TEXT
-        )
-    ''')
-    
-    # Migração do Escritório
-    cursor.execute("PRAGMA table_info(configuracoes_escritorio)")
-    colunas_esc = [col[1] for col in cursor.fetchall()]
-    if "pasta_salvamento" not in colunas_esc:
-        cursor.execute("ALTER TABLE configuracoes_escritorio ADD COLUMN pasta_salvamento TEXT")
-    if "nome_advogado" not in colunas_esc:
-        cursor.execute("ALTER TABLE configuracoes_escritorio ADD COLUMN nome_advogado TEXT")
-        
-    # NOVA Tabela de Usuários (SaaS)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            senha TEXT NOT NULL,
-            plano TEXT DEFAULT 'basic',
-            usos_ia INTEGER DEFAULT 0
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    # 2. TABELA LOCAL (SQLite) - Configurações da máquina do advogado
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                escritorio TEXT,
+                advogado TEXT,
+                oab TEXT,
+                pasta_padrao TEXT
+            )
+        """)
+        conn.commit()
 
-# --- FUNÇÕES DE USUÁRIO (SAAS) ---
-
+# ==========================================
+# FUNÇÕES DE NUVEM (SUPABASE)
+# ==========================================
 def registrar_usuario(email, senha):
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO usuarios (email, senha, plano, usos_ia) VALUES (?, ?, 'basic', 0)", (email, senha))
-        conn.commit()
-        conn.close()
-        return True, "Usuário registrado com sucesso!"
-    except sqlite3.IntegrityError:
-        return False, "E-mail já cadastrado!"
+        with get_cloud_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO usuarios (email, senha) VALUES (%s, %s)",
+                    (email, senha)
+                )
+            conn.commit()
+        return True, "Conta criada com sucesso!"
+    except psycopg2.errors.UniqueViolation:
+        return False, "E-mail já está cadastrado no sistema."
     except Exception as e:
-        return False, f"Erro: {str(e)}"
+        return False, f"Erro no servidor: {e}"
 
 def autenticar_usuario(email, senha):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, plano, usos_ia FROM usuarios WHERE email = ? AND senha = ?", (email, senha))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {"id": row[0], "email": row[1], "plano": row[2], "usos_ia": row[3]}
-    return None
+    with get_cloud_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM usuarios WHERE email = %s AND senha = %s", (email, senha))
+            return cursor.fetchone()
 
 def obter_usuario(email):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, plano, usos_ia FROM usuarios WHERE email = ?", (email,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {"id": row[0], "email": row[1], "plano": row[2], "usos_ia": row[3]}
-    return None
+    with get_cloud_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM usuarios WHERE email = %s", (email,))
+            return cursor.fetchone()
 
 def registrar_uso_ia(email):
-    """Incrementa o contador de uso da IA do usuário logado"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE usuarios SET usos_ia = usos_ia + 1 WHERE email = ?", (email,))
-    conn.commit()
-    conn.close()
+    with get_cloud_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE usuarios SET usos_ia = usos_ia + 1 WHERE email = %s", (email,))
+        conn.commit()
 
 def atualizar_plano_pro(email):
-    """Muda o plano do usuário para PRO e zera o contador"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE usuarios SET plano = 'pro' WHERE email = ?", (email,))
-    conn.commit()
-    conn.close()
+    with get_cloud_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE usuarios SET plano = 'pro' WHERE email = %s", (email,))
+        conn.commit()
 
-# --- FUNÇÕES DE CONFIGURAÇÃO DO ESCRITÓRIO ---
-
-def salvar_configuracoes(nome_escritorio, nome_advogado, oab, pasta_salvamento):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM configuracoes_escritorio")
-    cursor.execute("INSERT INTO configuracoes_escritorio (nome_escritorio, nome_advogado, oab, pasta_salvamento) VALUES (?, ?, ?, ?)", (nome_escritorio, nome_advogado, oab, pasta_salvamento))
-    conn.commit()
-    conn.close()
+# ==========================================
+# FUNÇÕES LOCAIS (SQLITE)
+# ==========================================
+def salvar_configuracoes(escritorio, advogado, oab, pasta):
+    with sqlite3.connect(LOCAL_DB) as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO configuracoes (id, escritorio, advogado, oab, pasta_padrao) 
+            VALUES (1, ?, ?, ?, ?)
+        """, (escritorio, advogado, oab, pasta))
+        conn.commit()
 
 def carregar_configuracoes():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT nome_escritorio, nome_advogado, oab, pasta_salvamento FROM configuracoes_escritorio LIMIT 1")
-    row = cursor.fetchone()
-    conn.close()
-    return row
+    with sqlite3.connect(LOCAL_DB) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT escritorio, advogado, oab, pasta_padrao FROM configuracoes WHERE id = 1")
+        return cursor.fetchone()
